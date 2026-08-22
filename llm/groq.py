@@ -67,11 +67,7 @@ GROQ_SERVICE_VERSION = "1.0.0"
 # DEFAULT MODEL
 # ============================================================
 
-DEFAULT_GROQ_MODEL = os.getenv(
-    "GROQ_MODEL",
-    "llama-3.3-70b-versatile",
-)
-
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # ============================================================
 # DEFAULT PARAMETERS
@@ -108,15 +104,17 @@ class GroqConfig:
 
     api_key: Optional[str] = None
 
-    model: str = DEFAULT_GROQ_MODEL
+    model: str = field(
+        default_factory=resolve_model
+    )
 
-    temperature: float = DEFAULT_TEMPERATURE
+    temperature: float = 0.2
 
-    max_tokens: int = DEFAULT_MAX_TOKENS
+    max_tokens: int = 4096
 
-    timeout: int = DEFAULT_TIMEOUT
+    timeout: int = 120
 
-    max_retries: int = DEFAULT_MAX_RETRIES
+    max_retries: int = 3
 
     top_p: float = 1.0
 
@@ -126,7 +124,6 @@ class GroqConfig:
         "You are a senior AI curriculum "
         "and industry intelligence expert."
     )
-
 
 # ============================================================
 # LLM RESPONSE
@@ -192,25 +189,48 @@ def resolve_api_key(
     explicit_key: Optional[str] = None,
 ) -> Optional[str]:
 
+    # 1. Explicit key has highest priority
     if explicit_key:
-
         return explicit_key
 
-    return (
+    # 2. Streamlit Secrets
+    try:
+        import streamlit as st
 
-        os.getenv(
-            "GROQ_API_KEY"
+        key = st.secrets.get(
+            "GROQ_API_KEY",
+            None
         )
 
-        or
+        if key:
+            return str(key)
 
-        os.getenv(
-            "GROQ_APIKEY"
+    except Exception:
+        pass
+
+    # 3. Optional fallback for non-Streamlit usage
+    return os.getenv("GROQ_API_KEY")
+
+def resolve_model() -> str:
+
+    try:
+        import streamlit as st
+
+        model = st.secrets.get(
+            "GROQ_MODEL",
+            None
         )
 
+        if model:
+            return str(model)
+
+    except Exception:
+        pass
+
+    return os.getenv(
+        "GROQ_MODEL",
+        "llama-3.3-70b-versatile"
     )
-
-
 # ============================================================
 # CHECK GROQ INSTALLATION
 # ============================================================
