@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-
+import os
 import streamlit as st
 
 from curriculum.extractor import extract_syllabus
