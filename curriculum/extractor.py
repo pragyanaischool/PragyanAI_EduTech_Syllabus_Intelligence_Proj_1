@@ -12338,7 +12338,55 @@ def curriculum_changed(
         )
     )
 
+# ============================================================
+# COMPATIBILITY API
+# ============================================================
 
+def extract_syllabus(
+    text: str,
+    source_file: Optional[str] = None,
+    source_type: Optional[str] = None,
+    **kwargs: Any,
+):
+    """
+    Backward-compatible syllabus extraction API.
+
+    This function is used by:
+        pages/01_Extract_Syllabus.py
+
+    Internally it delegates to the existing
+    extract_curriculum_from_text() implementation.
+    """
+
+    if text is None:
+        raise ValueError(
+            "Syllabus text cannot be None."
+        )
+
+    text = prepare_input_text(
+        text,
+        max_characters=kwargs.get(
+            "max_characters",
+            DEFAULT_MAX_INPUT_CHARS,
+        ),
+    )
+
+    return extract_curriculum_from_text(
+        text=text,
+        source_file=source_file,
+        source_type=(
+            source_type
+            or detect_source_type(
+                filename=source_file
+            )
+        ),
+        **{
+            key: value
+            for key, value in kwargs.items()
+            if key != "max_characters"
+        },
+    )
+    
 # ============================================================
 # 130. PUBLIC EXTRACTION API
 # ============================================================
@@ -12348,7 +12396,8 @@ __all__ = [
     # --------------------------------------------------------
     # Main extraction
     # --------------------------------------------------------
-
+    "extract_syllabus",
+    
     "extract_curriculum",
 
     "extract_curriculum_from_text",
