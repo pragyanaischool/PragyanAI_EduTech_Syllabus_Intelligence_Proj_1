@@ -549,18 +549,26 @@ if uploaded_file:
                 20
             )
 
-            pages = process_uploaded_file(
+            document_result = process_uploaded_file(
                 uploaded_file
             )
-
-            pages = normalize_extracted_pages(
-                pages
-            )
-
-            if not pages:
-
+            if not document_result.get(
+                "success",
+                False,
+            ):
                 raise ValueError(
-                    "The document could not be processed."
+                    document_result.get(
+                        "error",
+                        "The document could not be processed."
+                    )
+                )
+            extracted_text = document_result.get(
+                "text",
+                ""
+            ).strip()
+            if not extracted_text:
+                raise ValueError(
+                    "No readable text was extracted from the document."
                 )
 
             # ------------------------------------------------
