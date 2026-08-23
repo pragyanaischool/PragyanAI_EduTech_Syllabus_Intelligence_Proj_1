@@ -171,7 +171,7 @@ DEFAULT_MAX_TOKENS = int(
 
         "GROQ_MAX_TOKENS",
 
-        "16000",
+        "3500",
 
     )
 
@@ -1832,6 +1832,16 @@ def call_groq(
 
         max_tokens=config.max_tokens,
 
+        # GPT-OSS models expose reasoning separately. Hide reasoning
+        # so the assistant content channel contains the JSON payload.
+        reasoning_format="hidden",
+
+        # The extractor requires machine-readable JSON. Groq supports
+        # JSON Object Mode for GPT-OSS 120B.
+        response_format={
+            "type": "json_object",
+        },
+
     )
 
 
@@ -1842,19 +1852,87 @@ def call_groq(
         )
 
 
-    content = response.choices[
-        0
-    ].message.content
+    message = response.choices[0].message
 
+    # Groq GPT-OSS responses can expose reasoning separately from
+    # the assistant content. We intentionally parse ONLY content.
+    content = getattr(
+        message,
+        "content",
+        None,
+    )
+
+    if content:
+
+        content = str(content).strip()
 
     if not content:
 
-        raise RuntimeError(
-            "Groq returned empty content."
+        reasoning = getattr(
+            message,
+            "reasoning",
+            None,
         )
 
+        refusal = getattr(
+            message,
+            "refusal",
+            None,
+        )
 
-    return content.strip()
+        tool_calls = getattr(
+            message,
+            "tool_calls",
+            None,
+        )
+
+        logger.warning(
+            (
+                "Groq returned HTTP 200 but empty "
+                "message.content; reasoning=%s, "
+                "tool_calls=%s, refusal=%s"
+            ),
+            bool(reasoning),
+            bool(tool_calls),
+            bool(refusal),
+        )
+
+        if refusal:
+            raise RuntimeError(
+                "Groq refused the extraction request: "
+                f"{refusal}"
+            )
+
+        if tool_calls:
+            raise RuntimeError(
+                "Groq returned tool calls instead of "
+                "curriculum JSON."
+            )
+
+        # Some GPT-OSS responses may expose useful structured
+        # output in the reasoning field when content is empty.
+        # Only accept it when it actually contains valid JSON.
+        if reasoning:
+            reasoning_text = str(reasoning).strip()
+            reasoning_payload = extract_json_object(
+                reasoning_text
+            )
+            if reasoning_payload is not None:
+                logger.warning(
+                    "Groq content was empty; recovered valid JSON "
+                    "from the reasoning field."
+                )
+                return json.dumps(
+                    reasoning_payload,
+                    ensure_ascii=False,
+                )
+
+        raise RuntimeError(
+            "Groq returned HTTP 200 but no assistant content. "
+            "The response contained no usable JSON content."
+        )
+
+    return content
 
 
 # ============================================================
@@ -1922,7 +2000,8 @@ def call_groq_with_retry(
 
         (
             "Groq extraction failed after "
-            f"{retries + 1} attempts."
+            f"{retries + 1} attempts. "
+            f"Last error: {last_error}"
         )
 
     ) from last_error
@@ -9389,7 +9468,7 @@ def extract_curriculum(
         # processed in small independent requests.
         # ----------------------------------------------------
 
-        if len(prepared_text) > 12000:
+        if len(prepared_text) > 7000:
 
             payload = extract_large_curriculum_payload(
                 syllabus_text=prepared_text,
@@ -9854,27 +9933,47 @@ def extract_large_curriculum_payload(
             source_type=source_type,
         )
 
-        response = call_groq_with_retry(
-            prompt=prompt,
-            system_prompt=CHUNK_EXTRACTION_SYSTEM_PROMPT,
-            config=chunk_config,
-            retries=0,
-        )
-
-        payload = extract_json_object(response)
-
-        if payload is None:
-            raise ValueError(
-                f"Chunk {index}/{len(chunks)} returned invalid JSON."
+        try:
+            response = call_groq_with_retry(
+                prompt=prompt,
+                system_prompt=CHUNK_EXTRACTION_SYSTEM_PROMPT,
+                config=chunk_config,
+                retries=0,
             )
 
-        payloads.append(payload)
+            payload = extract_json_object(response)
+
+        except Exception as chunk_error:
+            logger.warning(
+                "Chunk %s/%s failed: %s",
+                index,
+                len(chunks),
+                chunk_error,
+            )
+            payload = None
+
+        if payload is None:
+            # Keep processing other chunks. A missing chunk should not
+            # destroy the entire syllabus extraction.
+            logger.warning(
+                "Skipping chunk %s/%s because no valid JSON was returned.",
+                index,
+                len(chunks),
+            )
+        else:
+            payloads.append(payload)
 
         # The current Groq organization reports an 8K TPM limit.
         # A short delay prevents consecutive chunk requests from
         # immediately exceeding that rolling limit.
         if index < len(chunks):
             time.sleep(DEFAULT_CHUNK_DELAY_SECONDS)
+
+    if not payloads:
+        raise RuntimeError(
+            "All syllabus chunks failed to produce valid JSON. "
+            "Check the Groq model, API key, rate limit, and response format."
+        )
 
     return merge_chunk_payloads(
         payloads=payloads,
